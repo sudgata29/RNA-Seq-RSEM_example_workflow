@@ -1,0 +1,7 @@
+sample	run	condition
+NCI	1	Colon
+NCI	2	Pancreas
+NCI	3	Colon
+NCI	4	Pancreas
+NCI	5	Colon
+NCI	6	Pancreas

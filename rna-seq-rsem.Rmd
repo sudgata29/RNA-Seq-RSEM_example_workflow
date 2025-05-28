@@ -1,0 +1,199 @@
+---
+title: "RNA-Seq-RSEM-workflow"
+---
+
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("tximport")
+
+
+# The following initializes usage of Bioc devel
+BiocManager::install(version='devel')
+
+BiocManager::install("tximportData")
+
+BiocManager::install("DESeq2")
+
+BiocManager::install("apeglm")
+
+
+
+library(tximport)
+
+library(tximportData)
+
+library(DESeq2)
+
+library(apeglm)
+
+library(dplyr)
+
+library(tidyverse)
+
+library(ggplot2)
+
+library(ggrepel)
+
+
+
+
+
+
+
+path <- normalizePath("~/Documents/GitHub/RNA-Seq-RSEM/RNA-Seq-RSEM_example_workflow/")
+
+
+samples <- read.table(file.path(path, "samples.txt"), header = TRUE)
+
+samples
+
+rows <- nrow(samples)
+
+files <- file.path(dir, "rsem", samples$run, paste0(samples$run, ".genes.results.tabular"))
+
+names(files) <- paste0("sample", 1:rows)
+
+files[] 
+
+files
+
+txi.rsem <- tximport(files, type = "rsem", txIn = FALSE, txOut = FALSE,
+                      geneIdCol = "gene_id",
+                     abundanceCol = "FPKM",
+                     countsCol = "expected_count",
+                     lengthCol = "effective_length")
+
+head(txi.rsem$counts)
+
+
+
+
+
+
+txi.rsem$abundance <- txi.rsem$abundance[apply(txi.rsem$length, 1, function(row) all(row !=0 )),]
+
+txi.rsem$counts <- txi.rsem$counts[apply(txi.rsem$length,1,function(row) all(row !=0 )),]
+
+txi.rsem$length <- txi.rsem$length[apply(txi.rsem$length, 1, function(row) all(row !=0 )),]
+
+
+dds <- DESeqDataSetFromTximport(txi.rsem,
+                                   colData = samples,
+                                   design = ~ condition)
+
+dds <- estimateSizeFactors(dds)
+dds <- DESeq(dds)
+normalized_counts <- counts(dds, normalized=TRUE)
+
+res <- results(dds, contrast = c("condition","Pancreas","Colon"))
+res
+
+res <- na.omit(res)
+
+res
+
+res$gene <- rownames(res)
+
+res <- res[, c("gene", setdiff(names(res), "gene"))]
+
+res <- as.data.frame(res)
+
+
+write.csv(res, file = "~/Documents/GitHub/RNA-Seq-RSEM/RNA-Seq-RSEM_example_workflow/deseq_output.csv")
+
+
+
+
+
+
+res <- res %>% 
+  mutate(rnk = sign(log2FoldChange) * (-log10(pvalue)))
+
+subset_res <- res %>%
+  select(rnk)
+
+subset_res <- arrange(subset_res, -rnk)
+
+write.csv(subset_res, file = "~/Documents/GitHub/RNA-Seq-RSEM/RNA-Seq-RSEM_example_workflow/deseq_rnk.csv")
+
+
+
+
+
+
+
+neg <- read_tsv('~/Documents/GitHub/RNA-Seq-RSEM/RNA-Seq-RSEM_example_workflow/GSEA_output/kras_gsea.GseaPreranked.1748457713956/gsea_report_for_na_neg_1748457713956.tsv')
+
+head(neg)
+
+neg_data <- neg[, c("NAME", "FDR q-val")] %>%
+  mutate(log10fdr = log10(`FDR q-val`+1e-10))
+
+
+
+pos <- read_tsv('~/Documents/GitHub/RNA-Seq-RSEM/RNA-Seq-RSEM_example_workflow/GSEA_output/kras_gsea.GseaPreranked.1748457713956/gsea_report_for_na_pos_1748457713956.tsv')
+
+head(pos)
+
+pos_data <- pos[, c("NAME", "FDR q-val")] %>%
+  mutate(log10fdr = -log10(`FDR q-val`+1e-10))
+
+
+
+merge <- full_join(neg_data, pos_data) 
+
+
+
+
+
+
+merge <- filter(merge, log10fdr > 1.3 | log10fdr < -1.3)
+
+merge <- merge %>%
+  mutate(cond = case_when(
+    log10fdr > -1.3 ~ "red",
+    log10fdr < 1.3 ~"blue"
+  ))
+
+plot <- ggplot(merge, mapping = aes(x=log10fdr, y=reorder(NAME, -log10fdr))) + 
+  geom_bar(stat = "identity", color = "black", aes(fill=cond)) + 
+  scale_fill_identity() +
+  xlab("-log10(FDR q-value)") +
+  ylab("Hallmark Pathways") +
+  geom_vline(xintercept = 1.3, linetype = "dashed", color = "black") +
+  geom_vline(xintercept =  -1.3, linetype = "dashed", color = "black") +
+  xlim(-10, 10)
+
+plot
+
+
+
+
+
+res$Pathways <- "NS"
+
+res$Pathways[res$log2FoldChange > 1.3 & res$pvalue < 0.05] <- "Up"
+
+res$Pathways[res$log2FoldChange < -1.3 & res$pvalue < 0.05] <- "Down"
+
+top50 <- head(res[order(res$pvalue), "gene"], 50)
+
+res$de50 <- ifelse(res$gene %in% top50, res$gene, NA)
+
+
+volcano <- ggplot(res, aes(x=log2FoldChange, y=-log10(pvalue), col = Pathways, label = de50)) +
+  geom_point() +
+  geom_vline(xintercept = 1.3, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = -1.3, linetype = "dashed", color = "black") +
+  geom_hline(yintercept = 1.3, linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -1.3, linetype = "dashed", color = "blue") +
+  scale_color_manual(values = c("red", "grey", "blue"),
+                     labels = c("Downregulated", "Not Significant", "Upregulated")) +
+  geom_text_repel(max.overlaps = Inf)
+
+volcano
+
+
+
